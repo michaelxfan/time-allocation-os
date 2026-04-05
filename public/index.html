@@ -40,7 +40,7 @@
   @media(max-width:860px){ .top-panels { grid-template-columns:1fr; } }
 
   /* Input Panel */
-  .input-panel { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:24px 28px 20px; }
+  .input-panel { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:16px 24px 14px; }
   .panel-title { font-size:14px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-secondary); margin-bottom:16px; }
   .input-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:14px 20px; }
   .input-group label { display:block; font-size:12px; font-weight:600; color:var(--text-secondary); margin-bottom:4px; }
@@ -67,25 +67,29 @@
   .manual-override-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px 18px; margin-top:10px; }
 
   /* WHOOP Panel */
-  .whoop-panel { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:24px 28px 20px; }
-  .whoop-headline-bar { display:flex; align-items:center; gap:16px; flex-wrap:wrap; margin-bottom:16px; }
+  .whoop-panel { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:16px 24px 14px; }
   .whoop-headline { font-size:17px; font-weight:700; }
+  .whoop-headline-dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:8px; vertical-align:middle; position:relative; top:-1px; }
+  .whoop-headline-dot.dot-green { background:var(--green); box-shadow:0 0 6px var(--green); }
+  .whoop-headline-dot.dot-amber { background:var(--amber); box-shadow:0 0 6px var(--amber); }
+  .whoop-headline-dot.dot-red { background:var(--red); box-shadow:0 0 6px var(--red); }
   .whoop-source-badge { font-size:11px; font-weight:600; padding:3px 10px; border-radius:20px; }
   .source-live { background:var(--green-light); color:var(--green); }
   .source-mock { background:var(--amber-light); color:var(--amber); }
   .source-error { background:var(--red-light); color:var(--red); }
 
-  .whoop-metrics-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }
-  .metric-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:14px 16px; text-align:center; }
-  .metric-card .metric-label { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.4px; color:var(--text-muted); margin-bottom:4px; }
-  .metric-card .metric-value { font-size:24px; font-weight:700; }
-  .metric-card .metric-unit { font-size:11px; color:var(--text-secondary); margin-top:2px; }
-  .metric-card .metric-bar { height:4px; border-radius:2px; background:var(--border); margin-top:8px; overflow:hidden; }
+  .whoop-metrics-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; }
+  .metric-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-sm); box-shadow:var(--shadow); padding:10px 12px; text-align:center; }
+  .metric-card .metric-label { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.4px; color:var(--text-muted); margin-bottom:2px; }
+  .metric-card .metric-value { font-size:22px; font-weight:700; }
+  .metric-card .metric-unit { font-size:10px; color:var(--text-secondary); margin-top:1px; }
+  .metric-card .metric-bar { height:3px; border-radius:2px; background:var(--border); margin-top:6px; overflow:hidden; }
   .metric-card .metric-bar-fill { height:100%; border-radius:2px; transition:width 0.4s ease; }
 
-  .whoop-interpretation { background:#fafbfc; border:1px solid var(--border); border-radius:var(--radius); padding:14px 18px; margin-top:14px; font-size:12px; color:var(--text-secondary); line-height:1.6; }
-  .whoop-interpretation strong { color:var(--text); }
-  .whoop-timestamp { font-size:11px; color:var(--text-muted); margin-top:10px; text-align:right; }
+  .whoop-headline-bar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:0; flex:1; }
+  .whoop-header-row { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:10px; }
+  .whoop-status-row { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+  .whoop-sync { font-size:11px; color:var(--text-muted); white-space:nowrap; }
 
   /* Sections */
   .section { margin-top:24px; }
@@ -499,6 +503,7 @@ const MOCK_TASKS=[
 // WHOOP CONNECTION
 // ============================================================
 let whoopState = null;
+let whoopLastSyncAt = null;
 let whoopStatus = { configured:false, connected:false };
 const API_BASE = '';
 
@@ -526,12 +531,14 @@ async function fetchWhoopWithFallback() {
     if (data) {
       cachePayload('whoop', data);
       whoopState = data;
-      return fetchResult('whoop','live',true,data,{lastSuccessAt:new Date().toISOString()});
+      whoopLastSyncAt = new Date().toISOString();
+      return fetchResult('whoop','live',true,data,{lastSuccessAt:whoopLastSyncAt});
     }
     // Live failed — try cache
     const cached = getCachedPayload('whoop');
     if (cached && cached.data) {
       whoopState = cached.data;
+      whoopLastSyncAt = cached.cachedAt;
       return fetchResult('whoop','stale',true,cached.data,{lastSuccessAt:cached.cachedAt,cachedAt:cached.cachedAt,errorMessage:'Live fetch failed, using cached WHOOP data'});
     }
     // Fall to manual
@@ -542,6 +549,7 @@ async function fetchWhoopWithFallback() {
   const cached = getCachedPayload('whoop');
   if (cached && cached.data) {
     whoopState = cached.data;
+    whoopLastSyncAt = cached.cachedAt;
     return fetchResult('whoop','stale',true,cached.data,{lastSuccessAt:cached.cachedAt,cachedAt:cached.cachedAt,errorMessage:'WHOOP not connected, using cached data'});
   }
   if (DEV_MODE) {
@@ -735,9 +743,9 @@ function classifyDayLane(inputs, readiness) {
   let lane, reason, overrideApplied=null;
   const r = readiness.recoveryScore ?? 50;
   if (inputs.dayType==='Recovery Day') { lane='Recovery Preservation'; reason='Day type is Recovery Day.'; }
-  else if (inputs.dayType==='Travel') { lane='Mixed Day'; reason='Travel days get a mixed allocation.'; }
-  else if (inputs.dayType==='Weekend') { lane='Personal Admin'; reason=inputs.dayOfWeek+' weekend defaults to Personal Admin.'; }
-  else { lane='GH Execution'; reason=inputs.dayOfWeek+' workday defaults to GH Execution.'; }
+  else if (inputs.dayType==='Travel') { lane='Explorer Mode'; reason='Travel day — flexible allocation with mixed demands.'; }
+  else if (inputs.dayType==='Weekend') { lane='Personal Admin'; reason=inputs.dayOfWeek+' weekend defaults to Operator - Personal.'; }
+  else { lane='GH Execution'; reason=inputs.dayOfWeek+' workday defaults to Operator - Greenhouse.'; }
   if (r<=33) { if(lane!=='Recovery Preservation'){ overrideApplied=`Recovery is very low (${r}%). Shifting to Recovery Preservation.`; lane='Recovery Preservation'; } }
   else if (lane==='GH Execution'&&r>=80&&inputs.priorCogLoad==='Low') { overrideApplied='Strong recovery + low prior-day load — shifting to Mixed Day.'; lane='Mixed Day'; }
   else if (lane==='Personal Admin'&&inputs.dayType==='Weekend'&&r>=75) { overrideApplied='Weekend but recovery is strong — Mixed Day to include Innovative tasks.'; lane='Mixed Day'; }
@@ -769,7 +777,7 @@ function determineAECeilingFromWhoop(readiness, priorCogLoad) {
 // ============================================================
 // TASK SCORING & RANKING
 // ============================================================
-function getAllowedLists(l){return{'GH Execution':{primary:['GH'],secondary:['Innovative'],minimal:['Personal']},'Personal Admin':{primary:['Personal'],secondary:['Innovative'],minimal:['GH']},'Innovative / Strategic':{primary:['Innovative'],secondary:['GH'],minimal:['Personal']},'Recovery Preservation':{primary:['Personal'],secondary:[],minimal:[]},'Mixed Day':{primary:['GH','Personal','Innovative'],secondary:[],minimal:[]}}[l]||{primary:['GH','Personal','Innovative'],secondary:[],minimal:[]};}
+function getAllowedLists(l){return{'GH Execution':{primary:['GH'],secondary:['Innovative'],minimal:['Personal']},'Personal Admin':{primary:['Personal'],secondary:['Innovative'],minimal:['GH']},'Innovative / Strategic':{primary:['Innovative'],secondary:['GH'],minimal:['Personal']},'Recovery Preservation':{primary:['Personal'],secondary:[],minimal:[]},'Mixed Day':{primary:['GH','Personal','Innovative'],secondary:[],minimal:[]},'Explorer Mode':{primary:['GH','Personal','Innovative'],secondary:[],minimal:[]}}[l]||{primary:['GH','Personal','Innovative'],secondary:[],minimal:[]};}
 
 // ── MULTIPLIER TABLES ────────────────────────────────────────
 const LEVERAGE_MULT = { 'Unblocker':1.5, 'Growth':1.3, 'Direct Output':1.0, 'Maintenance':0.7 };
@@ -883,16 +891,25 @@ function normalizeTimebox(m){if(m<=10)return 15;if(m<=17)return 15;if(m<=22)retu
 function generateDayStructure(ctx,ranked){const{aeCeiling,dayLane}=ctx;const r=ctx.readiness.recoveryScore??50;const s=[];
 if(dayLane==='Recovery Preservation'){s.push({period:'Morning',workType:'Gentle start',detail:'Light personal tasks or stretch. No demanding work.'});s.push({period:'Midday',workType:'Low-friction admin',detail:'Easy personal items — bills, scheduling.'});s.push({period:'Afternoon',workType:'Rest or light activity',detail:'Walk, read, or nap.'});s.push({period:'Evening',workType:'Wind down',detail:'Journal, reflect, or prep for tomorrow.'});return s;}
 if(aeCeiling>=3&&r>=60){const best=ranked.find(x=>x.task.ae>=2);s.push({period:'Morning',workType:'Deep focus — AE 3 or AE 2',detail:best?`Lead with: ${best.task.title}`:'Tackle your hardest task first.'});}else if(aeCeiling>=2){s.push({period:'Morning',workType:'Focused execution — AE 2',detail:r<50?'Ease in — start with a medium task after warm-up.':'Start with a medium-effort task while energy is fresh.'});}else{s.push({period:'Morning',workType:'Light start — AE 1 only',detail:"Easy wins first. Don't push too hard."});}
-if(dayLane==='GH Execution'||dayLane==='Mixed Day')s.push({period:'Midday',workType:'Execution block',detail:'GH tasks, communications, updates.'});else if(dayLane==='Innovative / Strategic')s.push({period:'Midday',workType:'Strategic thinking',detail:'Continue deep work or brainstorming.'});else s.push({period:'Midday',workType:'Personal admin batch',detail:'Batch errands, calls, quick tasks.'});
+if(dayLane==='GH Execution'||dayLane==='Mixed Day')s.push({period:'Midday',workType:'Execution block',detail:'GH tasks, communications, updates.'});else if(dayLane==='Explorer Mode')s.push({period:'Midday',workType:'Flexible block',detail:'Portable tasks, light admin, or travel logistics.'});else if(dayLane==='Innovative / Strategic')s.push({period:'Midday',workType:'Strategic thinking',detail:'Continue deep work or brainstorming.'});else s.push({period:'Midday',workType:'Personal admin batch',detail:'Batch errands, calls, quick tasks.'});
 const pmAE=r<50?1:Math.max(aeCeiling-1,1);
-if(dayLane==='Mixed Day')s.push({period:'Afternoon',workType:`Mixed tasks — AE ${pmAE} max`,detail:'Switch context if morning was GH.'});else s.push({period:'Afternoon',workType:`Follow-through — AE ${pmAE}`,detail:r<50?'Energy fading. Keep tasks short.':'Wrap up open items, smaller tasks.'});
+if(dayLane==='Explorer Mode')s.push({period:'Afternoon',workType:`Opportunistic tasks — AE ${pmAE} max`,detail:'Fit in work between movement. Keep it light.'});else if(dayLane==='Mixed Day')s.push({period:'Afternoon',workType:`Mixed tasks — AE ${pmAE} max`,detail:'Switch context if morning was GH.'});else s.push({period:'Afternoon',workType:`Follow-through — AE ${pmAE}`,detail:r<50?'Energy fading. Keep tasks short.':'Wrap up open items, smaller tasks.'});
 s.push({period:'Evening',workType:'Personal / Recovery',detail:aeCeiling>=2&&r>=50?'Personal admin, reflection, planning.':'Rest. Light journaling only if energy allows.'});
 return s;}
 
 // ============================================================
 // WHOOP READINESS HEADLINE & INTERPRETATION
 // ============================================================
-function getWhoopHeadline(readiness,ae){const r=readiness.recoveryScore;if(r==null)return'Readiness data unavailable';if(r>=75)return'Strong physiological readiness today';if(r>=50)return'Moderate-capacity day — pace accordingly';if(r>=34)return'Below-average recovery — cap cognitive load';return'Low recovery — protect your energy';}
+function computeReadinessScore(readiness){
+  const r=readiness.recoveryScore??50;
+  const sleepNorm=Math.min((readiness.sleepHours??7)/8,1);
+  return Math.round(r*0.7+sleepNorm*100*0.3);
+}
+function readinessDotClass(readiness){
+  const s=computeReadinessScore(readiness);
+  return s>=75?'dot-green':s>=50?'dot-amber':'dot-red';
+}
+function getWhoopHeadline(readiness,ae){const r=readiness.recoveryScore;if(r==null)return'Readiness data unavailable';if(r>=75)return'Strong physiological readiness';if(r>=50)return'Moderate-capacity day';if(r>=34)return'Below-average recovery';return'Low recovery — protect energy';}
 
 function getWhoopInterpretation(readiness,aeResult){const lines=[];const r=readiness.recoveryScore??50;const sleep=readiness.sleepHours??7;const ae=aeResult.ae;
 if(ae===3)lines.push('Your body can support 4-6 hours of focused cognitive work today.');else if(ae===2)lines.push('Aim for 2-4 hours of focused work. Interleave with lighter tasks.');else lines.push('Limit demanding work to 1-2 hours max. Prioritize recovery.');
@@ -904,7 +921,18 @@ return lines;}
 // ============================================================
 // RENDERING
 // ============================================================
-function laneBadge(l){return{'GH Execution':'badge-gh','Personal Admin':'badge-personal','Innovative / Strategic':'badge-innovative','Recovery Preservation':'badge-recovery','Mixed Day':'badge-mixed'}[l]||'badge-mixed';}
+// ── Centralized display label mapping ──
+const LANE_DISPLAY = {
+  'GH Execution':'Operator - Greenhouse',
+  'Personal Admin':'Operator - Personal',
+  'Innovative / Strategic':'Innovative / Strategic',
+  'Recovery Preservation':'Recovery Preservation',
+  'Mixed Day':'Mixed Day',
+  'Explorer Mode':'Explorer Mode'
+};
+function laneDisplayLabel(lane){ return LANE_DISPLAY[lane] || lane; }
+
+function laneBadge(l){return{'GH Execution':'badge-gh','Personal Admin':'badge-personal','Innovative / Strategic':'badge-innovative','Recovery Preservation':'badge-recovery','Mixed Day':'badge-mixed','Explorer Mode':'badge-mixed'}[l]||'badge-mixed';}
 function listBadge(l){return l==='GH'?'badge-gh':l==='Personal'?'badge-personal':'badge-innovative';}
 function aeBadge(a){return a===3?'badge-ae3':a===2?'badge-ae2':'badge-ae1';}
 function rColor(r){return r>=67?'green':r>=34?'amber':'red';}
@@ -931,19 +959,27 @@ function renderWhoopPanel(readiness,aeResult,source){
   const slpPct=readiness.sleepHours!=null?Math.min(100,Math.round(readiness.sleepHours/8*100)):null;
   const slpCol=readiness.sleepHours!=null?(readiness.sleepHours>=7?'green':readiness.sleepHours>=6?'amber':'red'):'amber';
 
-  let interp='';
-  if(aeResult){const lines=getWhoopInterpretation(readiness,aeResult);interp=`<div class="whoop-interpretation"><strong>What this means for today</strong><br>${lines.map(l=>'&bull; '+l).join('<br>')}</div>`;}
+  // Last successful sync time
+  let syncLabel = '—';
+  if (whoopLastSyncAt) {
+    try { syncLabel = new Date(whoopLastSyncAt).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}); } catch { syncLabel = '—'; }
+  }
 
-  return `<div class="panel-title">WHOOP Readiness</div>
-    <div class="whoop-headline-bar"><span class="whoop-headline">${headline}</span><span class="whoop-source-badge ${srcClass}">${srcLabel}</span></div>
+  // Readiness dot color
+  const dotClass = readinessDotClass(readiness);
+
+  return `<div class="panel-title" style="margin-bottom:6px">WHOOP Readiness</div>
+    <div class="whoop-headline-bar"><span class="whoop-headline"><span class="whoop-headline-dot ${dotClass}"></span>${headline}</span></div>
+    <div class="whoop-status-row">
+      <span class="whoop-source-badge ${srcClass}">${srcLabel}</span>
+      <span class="whoop-sync">Last successful sync: ${syncLabel}</span>
+    </div>
     <div class="whoop-metrics-grid">
       ${mc('Recovery',r!=null?r+'%':'—','recovery score',recBar,recCol)}
       ${mc('HRV',readiness.hrv,'ms rMSSD',hrvPct,hrvCol)}
       ${mc('Resting HR',readiness.restingHeartRate,'bpm',rhrPct,rhrCol)}
       ${mc('Sleep',readiness.sleepHours!=null?readiness.sleepHours+'h':'—','total sleep',slpPct,slpCol)}
-    </div>
-    ${interp}
-    <div class="whoop-timestamp">Last updated: ${whoopState?new Date(whoopState.fetchedAt).toLocaleString():'—'}</div>`;
+    </div>`;
 }
 
 // ── 1. NEXT BEST ACTION ────────────────────────────────────
@@ -971,10 +1007,7 @@ function renderSummary(ctx){
   const{dayLane,aeCeiling,readiness}=ctx;
 
   // Mode
-  const modeLabel = {
-    'GH Execution':'GH Execution','Personal Admin':'Personal Admin','Innovative / Strategic':'Innovative',
-    'Recovery Preservation':'Recovery','Mixed Day':'Mixed'
-  }[dayLane] || dayLane;
+  const modeLabel = laneDisplayLabel(dayLane);
 
   // Max deep work
   let maxDeep;
@@ -989,6 +1022,7 @@ function renderSummary(ctx){
   else if(dayLane==='GH Execution') focus='Steady GH execution.';
   else if(dayLane==='Personal Admin') focus='Clear the personal backlog.';
   else if(dayLane==='Innovative / Strategic') focus='Protect uninterrupted thinking time.';
+  else if(dayLane==='Explorer Mode') focus='Flexible planning. Move between tasks as context shifts.';
   else if(dayLane==='Mixed Day'&&aeCeiling>=3) focus='Mix deep work with admin.';
   else focus='Balance effort across categories.';
 
@@ -997,6 +1031,7 @@ function renderSummary(ctx){
   if(aeCeiling===1) risk='Low energy — don\'t push.';
   else if(ctx.inputs.priorCogLoad==='High') risk='Yesterday was heavy. Watch fatigue.';
   else if((readiness.sleepHours??7)<6) risk='Short sleep. Front-load key work.';
+  else if(dayLane==='Explorer Mode') risk='Movement disrupts focus. Keep tasks portable.';
   else if(dayLane==='Mixed Day') risk='Context-switching drain. Batch tasks.';
   else risk='No major risks. Pace yourself.';
 
@@ -1085,7 +1120,7 @@ function renderLogic(ctx, ranked){
     ? `<strong>Commitments</strong><ul><li>${activeCommits.length} active today (${hardCount} hard, ${softCount} soft)</li>${activeCommits.map(c => `<li style="color:var(--text-muted)">${c.start}–${c.end} ${c.label} <em>(${c.type})</em></li>`).join('')}</ul>`
     : '';
 
-  // How scoring works footnote
+  // How scoring works footnote + mode definitions
   const footnote = `<div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px">
     <strong>How Task Scoring Works</strong>
     <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;margin-top:4px">
@@ -1093,6 +1128,17 @@ function renderLogic(ctx, ranked){
       <p><strong>AE Feasibility:</strong> Tasks exceeding today's AE ceiling are heavily penalized — e.g. an AE 3 task on an AE 1 day gets ×0.05, making it nearly invisible. This prevents unrealistic tasks from ranking highly.</p>
       <p><strong>Daypart Scheduling:</strong> Morning favors harder work (AE 3 → ×1.3). Afternoon favors lighter work (AE 1 → ×1.2). Evening favors medium work (AE 2 → ×1.2). Tasks are placed into blocks where their daypart fit is highest.</p>
       <p><strong>Commitments:</strong> Recurring commitments are filtered by today's weekday. Hard commitments always block time. Soft commitments block time but are visually distinguished.</p>
+    </div>
+  </div>
+  <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px">
+    <strong>Mode Definitions</strong>
+    <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;margin-top:4px">
+      <p><strong>Operator - Greenhouse:</strong> Execution-focused workday optimized for GH priorities.</p>
+      <p><strong>Operator - Personal:</strong> Personal admin day for life maintenance, errands, and cleanup.</p>
+      <p><strong>Explorer Mode:</strong> Travel or movement-oriented day with flexible allocation and mixed demands.</p>
+      <p><strong>Recovery Preservation:</strong> Protect energy and avoid high activation work.</p>
+      <p><strong>Mixed Day:</strong> Balanced across categories when recovery and context support it.</p>
+      <p><strong>Innovative / Strategic:</strong> Deep thinking and creative work when conditions are optimal.</p>
     </div>
   </div>`;
 
@@ -1102,7 +1148,7 @@ function renderLogic(ctx, ranked){
       <div class="logic-panel">
         <strong>Inputs</strong><ul><li>Day: ${inputs.dayOfWeek}, ${inputs.dayType} <span class="day-type-tag ${inputs.dayTypeSource==='auto'?'day-type-auto':'day-type-override'}">${inputs.dayTypeSource==='auto'?'Auto':'Override'}</span> · Prior cognitive load: ${inputs.priorCogLoad}</li><li>Readiness source: <strong>${src}</strong></li></ul>
         <strong>WHOOP Metrics Used</strong><ul>${aeResult.reasons.map(r=>`<li>${r}</li>`).join('')}</ul>
-        <strong>Day Lane Decision</strong><ul><li>Base rule: ${dayLaneResult.reason}</li>${dayLaneResult.overrideApplied?`<li>Override: ${dayLaneResult.overrideApplied}</li>`:'<li>No override applied.</li>'}<li>Final lane: <strong>${dayLaneResult.lane}</strong></li></ul>
+        <strong>Day Lane Decision</strong><ul><li>Base rule: ${dayLaneResult.reason}</li>${dayLaneResult.overrideApplied?`<li>Override: ${dayLaneResult.overrideApplied}</li>`:'<li>No override applied.</li>'}<li>Final lane: <strong>${laneDisplayLabel(dayLaneResult.lane)}</strong></li></ul>
         <strong>AE Ceiling Decision</strong><ul><li>${aeResult.explanation}</li><li>Capacity score: ${aeResult.capacity}/100</li></ul>
         <strong>Calendar</strong><ul><li>Source: ${ctx.calendarSource==='calendar'?'Google Calendar (live)':ctx.calendarSource==='stale'?'Google Calendar (stale cache)':'Manual availability + commitments'}</li>${ctx.calendarEventCount?`<li>${ctx.calendarEventCount} calendar events detected</li>`:''}</ul>
         ${taskSourceHtml}
