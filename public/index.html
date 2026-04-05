@@ -319,6 +319,9 @@
         <div class="header-status-line" id="headerGcalStatus">
           <span class="status-dot gray"></span> Checking Calendar...
         </div>
+        <div class="header-status-line" id="headerClickupStatus">
+          <span class="status-dot gray"></span> Checking ClickUp...
+        </div>
       </div>
     </div>
   </div>
@@ -446,12 +449,12 @@ function fetchResult(name, fetchSource, ok, data, opts={}) {
 // ============================================================
 // CLICKUP TASK SOURCE
 // ============================================================
-let clickupStatus = { configured:false };
+let clickupStatus = { configured:false, status:'unknown' };
 let clickupData = null;
 
 async function getClickUpConnectionStatus() {
   try { return await (await fetch(API_BASE+'/api/clickup/status')).json(); }
-  catch { return { configured:false }; }
+  catch { return { configured:false, status:'backend_unavailable' }; }
 }
 
 async function fetchClickUpTasks() {
@@ -463,8 +466,11 @@ async function fetchClickUpTasks() {
 }
 
 async function fetchClickUpWithFallback() {
-  clickupStatus = await getClickUpConnectionStatus();
-  if (clickupStatus.configured) {
+  // Status already fetched by fetchAllIntegrationStatuses()
+  const s = clickupStatus.status || 'unknown';
+  const canAttemptLive = ['connected','api_error'].includes(s);
+
+  if (canAttemptLive) {
     const data = await fetchClickUpTasks();
     if (data && data.tasks) {
       cachePayload('clickup', data);
@@ -473,11 +479,24 @@ async function fetchClickUpWithFallback() {
     // Live failed — try stale cache
     const cached = getCachedPayload('clickup');
     if (cached && cached.data) {
-      return fetchResult('clickup','stale',true,cached.data,{lastSuccessAt:cached.cachedAt,cachedAt:cached.cachedAt,errorMessage:'Live fetch failed, using cached data'});
+      return fetchResult('clickup','stale',true,cached.data,{lastSuccessAt:cached.cachedAt,cachedAt:cached.cachedAt,errorMessage:'ClickUp fetch failed — using cached data'});
     }
-    // No cache — dev mode mock or error
     if (DEV_MODE) return fetchResult('clickup','mock',true,{tasks:MOCK_TASKS,stats:null},{errorMessage:'Live+cache failed, using mock (dev mode)'});
-    return fetchResult('clickup','error',false,null,{errorMessage:'ClickUp fetch failed and no cached data available'});
+    return fetchResult('clickup','error',false,null,{errorMessage:'ClickUp fetch failed — no cached data available'});
+  }
+  if (s === 'reconnect_required') {
+    const cached = getCachedPayload('clickup');
+    if (cached && cached.data) {
+      return fetchResult('clickup','stale',true,cached.data,{lastSuccessAt:cached.cachedAt,cachedAt:cached.cachedAt,errorMessage:'ClickUp token invalid — using cached data'});
+    }
+    return fetchResult('clickup','error',false,null,{errorMessage:'ClickUp token invalid — update .env and restart'});
+  }
+  if (s === 'backend_unavailable') {
+    const cached = getCachedPayload('clickup');
+    if (cached && cached.data) {
+      return fetchResult('clickup','stale',true,cached.data,{lastSuccessAt:cached.cachedAt,cachedAt:cached.cachedAt,errorMessage:'Backend unavailable — using cached ClickUp data'});
+    }
+    return fetchResult('clickup','error',false,null,{errorMessage:'Backend unavailable — no cached ClickUp data'});
   }
   // Not configured
   if (DEV_MODE) return fetchResult('clickup','mock',true,{tasks:MOCK_TASKS,stats:null},{errorMessage:'Not configured, using mock (dev mode)'});
@@ -504,12 +523,34 @@ const MOCK_TASKS=[
 // ============================================================
 let whoopState = null;
 let whoopLastSyncAt = null;
-let whoopStatus = { configured:false, connected:false };
+let whoopStatus = { configured:false, connected:false, status:'unknown' };
 const API_BASE = '';
 
 async function getWhoopConnectionStatus() {
   try { const r = await fetch(API_BASE+'/api/whoop/status'); return await r.json(); }
-  catch { return { configured:false, connected:false }; }
+  catch { return { configured:false, connected:false, status:'backend_unavailable' }; }
+}
+
+// ── Combined status fetch (single network call) ──
+async function fetchAllIntegrationStatuses() {
+  try {
+    const r = await fetch(API_BASE+'/api/status');
+    if (!r.ok) throw new Error('Status endpoint failed');
+    const data = await r.json();
+    whoopStatus = data.whoop || { configured:false, status:'backend_unavailable' };
+    clickupStatus = data.clickup || { configured:false, status:'backend_unavailable' };
+    gcalStatus = data.calendar || { configured:false, status:'backend_unavailable' };
+    return data;
+  } catch {
+    // Backend is down — check if we have cached data
+    const hasCachedWhoop = !!getCachedPayload('whoop');
+    const hasCachedClickup = !!getCachedPayload('clickup');
+    const hasCachedCalendar = !!getCachedPayload('calendar');
+    whoopStatus = { configured:false, status:'backend_unavailable', cachedDataAvailable:hasCachedWhoop };
+    clickupStatus = { configured:false, status:'backend_unavailable', cachedDataAvailable:hasCachedClickup };
+    gcalStatus = { configured:false, status:'backend_unavailable', cachedDataAvailable:hasCachedCalendar };
+    return null;
+  }
 }
 
 async function fetchWhoopData() {
@@ -525,8 +566,11 @@ function getMockWhoopData() {
 }
 
 async function fetchWhoopWithFallback() {
-  whoopStatus = await getWhoopConnectionStatus();
-  if (whoopStatus.connected || whoopStatus.tokenValid) {
+  // Status already fetched by fetchAllIntegrationStatuses()
+  const s = whoopStatus.status || 'unknown';
+  const canAttemptLive = ['connected','token_expired','api_error'].includes(s);
+
+  if (canAttemptLive) {
     const data = await fetchWhoopData();
     if (data) {
       cachePayload('whoop', data);
@@ -534,30 +578,42 @@ async function fetchWhoopWithFallback() {
       whoopLastSyncAt = new Date().toISOString();
       return fetchResult('whoop','live',true,data,{lastSuccessAt:whoopLastSyncAt});
     }
-    // Live failed — try cache
+    // Live failed — determine why
+    const failReason = s === 'token_expired'
+      ? 'WHOOP token expired — using cached data'
+      : 'WHOOP live fetch failed — using cached data';
     const cached = getCachedPayload('whoop');
     if (cached && cached.data) {
       whoopState = cached.data;
       whoopLastSyncAt = cached.cachedAt;
-      return fetchResult('whoop','stale',true,cached.data,{lastSuccessAt:cached.cachedAt,cachedAt:cached.cachedAt,errorMessage:'Live fetch failed, using cached WHOOP data'});
+      return fetchResult('whoop','stale',true,cached.data,{lastSuccessAt:cached.cachedAt,cachedAt:cached.cachedAt,errorMessage:failReason});
     }
-    // Fall to manual
     whoopState = null;
-    return fetchResult('whoop','manual',false,null,{errorMessage:'WHOOP connected but fetch failed, no cache — using manual input'});
+    const msg = s === 'token_expired' ? 'WHOOP token expired, no cache — using manual input' : 'WHOOP fetch failed, no cache — using manual input';
+    return fetchResult('whoop','manual',false,null,{errorMessage:msg});
   }
-  // Not connected — try cache
+
+  // Not connected / not configured / backend unavailable — try cache
   const cached = getCachedPayload('whoop');
   if (cached && cached.data) {
     whoopState = cached.data;
     whoopLastSyncAt = cached.cachedAt;
-    return fetchResult('whoop','stale',true,cached.data,{lastSuccessAt:cached.cachedAt,cachedAt:cached.cachedAt,errorMessage:'WHOOP not connected, using cached data'});
+    const msg = s === 'reconnect_required' ? 'WHOOP reconnect required — using cached data'
+      : s === 'backend_unavailable' ? 'Backend unavailable — using cached WHOOP data'
+      : s === 'not_connected' ? 'WHOOP not connected — using cached data'
+      : 'WHOOP unavailable — using cached data';
+    return fetchResult('whoop','stale',true,cached.data,{lastSuccessAt:cached.cachedAt,cachedAt:cached.cachedAt,errorMessage:msg});
   }
   if (DEV_MODE) {
     whoopState = getMockWhoopData();
     return fetchResult('whoop','mock',true,whoopState,{errorMessage:'Using mock WHOOP data (dev mode)'});
   }
   whoopState = null;
-  return fetchResult('whoop','manual',false,null,{errorMessage:'WHOOP not available — using manual readiness input'});
+  const msg = s === 'not_configured' ? 'WHOOP not configured — using manual readiness input'
+    : s === 'reconnect_required' ? 'WHOOP reconnect required — please reconnect'
+    : s === 'backend_unavailable' ? 'Backend unavailable — using manual readiness input'
+    : 'WHOOP not available — using manual readiness input';
+  return fetchResult('whoop','manual',false,null,{errorMessage:msg});
 }
 
 async function disconnectWhoop() {
@@ -572,16 +628,31 @@ function updateHeaderStatus() {
   const el = document.getElementById('headerWhoopStatus');
   const btnC = document.getElementById('btnConnectWhoop');
   const btnD = document.getElementById('btnDisconnect');
-  if (whoopStatus.connected || whoopStatus.tokenValid) {
-    el.innerHTML = '<span class="status-dot green"></span> WHOOP Connected';
-    btnC.style.display='none'; btnD.style.display='';
-  } else if (whoopStatus.configured) {
-    el.innerHTML = '<span class="status-dot red"></span> WHOOP Not Connected';
-    btnC.style.display=''; btnD.style.display='none';
-  } else {
-    el.innerHTML = '<span class="status-dot gray"></span> WHOOP Not Configured';
-    btnC.style.display='none'; btnD.style.display='none';
+  const s = whoopStatus.status || 'unknown';
+  switch(s) {
+    case 'connected':
+      el.innerHTML = '<span class="status-dot green"></span> WHOOP Connected';
+      btnC.style.display='none'; btnD.style.display=''; break;
+    case 'token_expired':
+      el.innerHTML = '<span class="status-dot amber"></span> WHOOP Token Refreshing';
+      btnC.style.display='none'; btnD.style.display=''; break;
+    case 'reconnect_required':
+      el.innerHTML = '<span class="status-dot red"></span> WHOOP Reconnect Required';
+      btnC.style.display=''; btnD.style.display=''; break;
+    case 'not_connected':
+      el.innerHTML = '<span class="status-dot red"></span> WHOOP Not Connected';
+      btnC.style.display=''; btnD.style.display='none'; break;
+    case 'backend_unavailable':
+      el.innerHTML = '<span class="status-dot red"></span> Backend Unavailable';
+      btnC.style.display='none'; btnD.style.display='none'; break;
+    case 'not_configured':
+      el.innerHTML = '<span class="status-dot gray"></span> WHOOP Not Configured';
+      btnC.style.display='none'; btnD.style.display='none'; break;
+    default:
+      el.innerHTML = '<span class="status-dot gray"></span> WHOOP Unknown';
+      btnC.style.display='none'; btnD.style.display='none';
   }
+  updateClickUpHeaderStatus();
 }
 
 // ============================================================
@@ -605,9 +676,12 @@ async function fetchCalendarEventsForToday() {
 }
 
 async function fetchCalendarWithFallback(workStart, workEnd, todayDow) {
-  gcalStatus = await getGcalStatus();
+  // Status already fetched by fetchAllIntegrationStatuses()
   updateGcalUI();
-  if (gcalStatus.connected || gcalStatus.tokenValid) {
+  const s = gcalStatus.status || 'unknown';
+  const canAttemptLive = ['connected','token_expired','api_error'].includes(s);
+
+  if (canAttemptLive) {
     const data = await fetchCalendarEventsForToday();
     if (data && data.events) {
       cachePayload('calendar', data);
@@ -616,22 +690,38 @@ async function fetchCalendarWithFallback(workStart, workEnd, todayDow) {
       return fetchResult('calendar','live',true,avail,{lastSuccessAt:new Date().toISOString()});
     }
     // Live failed — try cache
+    const failMsg = s === 'token_expired' ? 'Calendar token expired — using cached events' : 'Calendar fetch failed — using cached events';
     const cached = getCachedPayload('calendar');
     if (cached && cached.data && cached.data.events) {
       gcalEvents = cached.data;
       const avail = generateBlocksFromCalendar(cached.data.events, workStart, workEnd, todayDow);
       avail.source = 'stale';
-      return fetchResult('calendar','stale',true,avail,{lastSuccessAt:cached.cachedAt,cachedAt:cached.cachedAt,errorMessage:'Calendar fetch failed, using cached events'});
+      return fetchResult('calendar','stale',true,avail,{lastSuccessAt:cached.cachedAt,cachedAt:cached.cachedAt,errorMessage:failMsg});
     }
-    // No cache — manual
     gcalEvents = null;
     const avail = generateAvailableTimeBlocks(todayDow); avail.source = 'manual';
-    return fetchResult('calendar','manual',true,avail,{errorMessage:'Calendar connected but fetch failed — using manual availability'});
+    return fetchResult('calendar','manual',true,avail,{errorMessage:'Calendar fetch failed, no cache — using manual availability'});
   }
-  // Not connected — manual
+
+  // Not connected / reconnect required / backend unavailable — try cache first
+  const cached = getCachedPayload('calendar');
+  if (cached && cached.data && cached.data.events) {
+    gcalEvents = cached.data;
+    const avail = generateBlocksFromCalendar(cached.data.events, workStart, workEnd, todayDow);
+    avail.source = 'stale';
+    const msg = s === 'reconnect_required' ? 'Calendar reconnect required — using cached events'
+      : s === 'backend_unavailable' ? 'Backend unavailable — using cached calendar data'
+      : s === 'not_connected' ? 'Calendar not connected — using cached events'
+      : 'Calendar unavailable — using cached events';
+    return fetchResult('calendar','stale',true,avail,{lastSuccessAt:cached.cachedAt,cachedAt:cached.cachedAt,errorMessage:msg});
+  }
+
   gcalEvents = null;
   const avail = generateAvailableTimeBlocks(todayDow); avail.source = 'manual';
-  return fetchResult('calendar','manual',true,avail,{errorMessage:'Calendar not connected — using manual availability + commitments'});
+  const msg = s === 'reconnect_required' ? 'Calendar reconnect required — using manual availability'
+    : s === 'not_configured' ? 'Calendar not configured — using manual availability'
+    : 'Calendar not available — using manual availability + commitments';
+  return fetchResult('calendar','manual',true,avail,{errorMessage:msg});
 }
 
 async function disconnectGcal() {
@@ -646,15 +736,49 @@ function updateGcalUI() {
   const el = document.getElementById('headerGcalStatus');
   const btnC = document.getElementById('btnConnectGcal');
   const btnD = document.getElementById('btnDisconnectGcal');
-  if (gcalStatus.connected || gcalStatus.tokenValid) {
-    el.innerHTML = '<span class="status-dot green"></span> Google Calendar Connected';
-    btnC.style.display='none'; btnD.style.display='';
-  } else if (gcalStatus.configured) {
-    el.innerHTML = '<span class="status-dot amber"></span> Calendar Not Connected';
-    btnC.style.display=''; btnD.style.display='none';
-  } else {
-    el.innerHTML = '<span class="status-dot gray"></span> Calendar Not Configured';
-    btnC.style.display='none'; btnD.style.display='none';
+  const s = gcalStatus.status || 'unknown';
+  switch(s) {
+    case 'connected':
+      el.innerHTML = '<span class="status-dot green"></span> Google Calendar Connected';
+      btnC.style.display='none'; btnD.style.display=''; break;
+    case 'token_expired':
+      el.innerHTML = '<span class="status-dot amber"></span> Calendar Token Refreshing';
+      btnC.style.display='none'; btnD.style.display=''; break;
+    case 'reconnect_required':
+      el.innerHTML = '<span class="status-dot red"></span> Calendar Reconnect Required';
+      btnC.style.display=''; btnD.style.display=''; break;
+    case 'not_connected':
+      el.innerHTML = '<span class="status-dot red"></span> Calendar Not Connected';
+      btnC.style.display=''; btnD.style.display='none'; break;
+    case 'backend_unavailable':
+      el.innerHTML = '<span class="status-dot red"></span> Backend Unavailable';
+      btnC.style.display='none'; btnD.style.display='none'; break;
+    case 'not_configured':
+      el.innerHTML = '<span class="status-dot gray"></span> Calendar Not Configured';
+      btnC.style.display='none'; btnD.style.display='none'; break;
+    default:
+      el.innerHTML = '<span class="status-dot gray"></span> Calendar Unknown';
+      btnC.style.display='none'; btnD.style.display='none';
+  }
+}
+
+function updateClickUpHeaderStatus() {
+  const el = document.getElementById('headerClickupStatus');
+  if (!el) return;
+  const s = clickupStatus.status || 'unknown';
+  switch(s) {
+    case 'connected':
+      el.innerHTML = '<span class="status-dot green"></span> ClickUp Connected'; break;
+    case 'reconnect_required':
+      el.innerHTML = '<span class="status-dot red"></span> ClickUp Token Invalid'; break;
+    case 'api_error':
+      el.innerHTML = '<span class="status-dot red"></span> ClickUp API Error'; break;
+    case 'backend_unavailable':
+      el.innerHTML = '<span class="status-dot red"></span> Backend Unavailable'; break;
+    case 'not_configured':
+      el.innerHTML = '<span class="status-dot gray"></span> ClickUp Not Configured'; break;
+    default:
+      el.innerHTML = '<span class="status-dot gray"></span> ClickUp Unknown';
   }
 }
 
@@ -1463,14 +1587,16 @@ async function refreshAllocation(){
     `${system.dayOfWeek}, ${system.dateString} <span class="day-type-tag ${dtTag}">${dtLabel}</span>`
     + ` <span style="font-size:11px;color:var(--text-muted);font-weight:400">${tz}</span>`;
 
+  // ── 2b. Fetch all integration statuses (single call) ──
+  await fetchAllIntegrationStatuses();
+  updateHeaderStatus();
+  updateGcalUI();
+
   // ── 3. Fetch WHOOP with fallback cascade ──
   const whoopResult = await fetchWhoopWithFallback();
-  updateHeaderStatus();
+  updateHeaderStatus(); // refresh after fetch may have updated state
   const whoopSource = whoopResult.fetchSource;
-  if (whoopSource === 'stale') warnings.push(`WHOOP data is cached (${agoLabel(whoopResult.cachedAt)})`);
-  else if (whoopSource === 'mock') warnings.push('WHOOP using mock data — dev mode');
-  else if (whoopSource === 'manual') warnings.push('WHOOP unavailable — using manual readiness input');
-  else if (whoopSource === 'error') warnings.push('WHOOP fetch failed — no data available');
+  if (whoopResult.errorMessage && whoopSource !== 'live') warnings.push(whoopResult.errorMessage);
 
   const inputs = { dayOfWeek:system.dayOfWeek, dayType:effectiveDayType, priorCogLoad:document.getElementById('priorCogLoad').value, dayTypeSource:isOverridden?'override':'auto' };
   const readiness = buildReadiness(whoopResult.ok ? whoopState : null, whoopSource);
@@ -1490,9 +1616,7 @@ async function refreshAllocation(){
     tasks = [];
     taskSource = 'error';
   }
-  if (clickupResult.fetchSource === 'stale') warnings.push(`ClickUp tasks are cached (${agoLabel(clickupResult.cachedAt)}) — recommendations may be stale`);
-  else if (clickupResult.fetchSource === 'mock') warnings.push('Using mock tasks — dev mode');
-  else if (clickupResult.fetchSource === 'error') warnings.push('ClickUp unavailable — task recommendations are not available');
+  if (clickupResult.errorMessage && clickupResult.fetchSource !== 'live') warnings.push(clickupResult.errorMessage);
 
   const ranked = rankTasks(tasks, ctx);
   ctx.taskSource = taskSource;
@@ -1509,10 +1633,7 @@ async function refreshAllocation(){
   const workEnd = document.getElementById('workEnd').value || '18:00';
   const calResult = await fetchCalendarWithFallback(workStart, workEnd, todayDow);
   const availResult = calResult.data;
-  if (calResult.fetchSource === 'stale') warnings.push(`Calendar events are cached (${agoLabel(calResult.cachedAt)})`);
-  else if (calResult.fetchSource === 'manual') {
-    if (gcalStatus.configured) warnings.push('Calendar fetch failed — using manual availability + commitments');
-  }
+  if (calResult.errorMessage && calResult.fetchSource !== 'live') warnings.push(calResult.errorMessage);
 
   ctx.calendarSource = availResult?.source || 'manual';
   ctx.calendarEventCount = availResult?.eventCount || 0;
@@ -1521,9 +1642,16 @@ async function refreshAllocation(){
   // ── 6. Render system banner ──
   const bannerEl = document.getElementById('systemBanner');
   if (warnings.length) {
-    const hasError = warnings.some(w => w.includes('unavailable') || w.includes('not available') || w.includes('failed'));
+    const hasError = warnings.some(w => /unavailable|not available|failed|invalid|not configured/.test(w));
+    const hasReconnect = warnings.some(w => /reconnect/.test(w));
     bannerEl.className = 'system-banner' + (hasError ? ' banner-error' : '');
-    bannerEl.innerHTML = warnings.map(w => `<div class="banner-line">⚠ ${w}</div>`).join('');
+    bannerEl.innerHTML = warnings.map(w => {
+      // Add reconnect links inline where relevant
+      let extra = '';
+      if (/WHOOP.*reconnect/i.test(w)) extra = ` <a href="${API_BASE}/auth/whoop" style="color:inherit;font-weight:600;text-decoration:underline">Reconnect WHOOP</a>`;
+      else if (/Calendar.*reconnect/i.test(w)) extra = ` <a href="${API_BASE}/auth/google" style="color:inherit;font-weight:600;text-decoration:underline">Reconnect Calendar</a>`;
+      return `<div class="banner-line">⚠ ${w}${extra}</div>`;
+    }).join('');
     bannerEl.style.display = '';
   } else {
     bannerEl.style.display = 'none';
@@ -1561,12 +1689,18 @@ async function refreshAllocation(){
 
 // ── Diagnostics renderer ──
 function renderDiagnostics(diag) {
+  const integrationStatuses = {
+    whoop: whoopStatus.status || '—',
+    calendar: gcalStatus.status || '—',
+    clickup: clickupStatus.status || '—'
+  };
   function srcRow(r) {
     const cls = r.ok ? (r.fetchSource==='live'?'diag-ok':'diag-warn') : 'diag-fail';
     const badge = r.fetchSource;
+    const intStatus = integrationStatuses[r.name] || '—';
     const age = r.cachedAt ? agoLabel(r.cachedAt) : '—';
     const err = r.errorMessage || '—';
-    return `<tr><td>${r.name}</td><td class="${cls}">${badge}</td><td>${r.ok?'✓':'✗'}</td><td>${age}</td><td style="max-width:300px;word-break:break-word">${err}</td></tr>`;
+    return `<tr><td>${r.name}</td><td class="${cls}">${intStatus}</td><td class="${cls}">${badge}</td><td>${r.ok?'✓':'✗'}</td><td>${age}</td><td style="max-width:250px;word-break:break-word">${err}</td></tr>`;
   }
   const rows = [diag.sources.whoop, diag.sources.calendar, diag.sources.clickup].map(srcRow).join('');
 
@@ -1579,7 +1713,7 @@ function renderDiagnostics(diag) {
       </div>
       <strong>Data Sources</strong>
       <table class="diag-table" style="margin-top:6px">
-        <thead><tr><th>Source</th><th>Status</th><th>OK</th><th>Cache Age</th><th>Notes</th></tr></thead>
+        <thead><tr><th>Source</th><th>Auth</th><th>Fetch</th><th>OK</th><th>Cache Age</th><th>Notes</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
       ${diag.warnings.length ? `<div style="margin-top:12px"><strong>Warnings</strong><ul style="font-size:12px;padding-left:18px;margin-top:4px">${diag.warnings.map(w=>`<li>${w}</li>`).join('')}</ul></div>` : ''}

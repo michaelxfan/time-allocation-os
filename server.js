@@ -17,6 +17,7 @@ const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const serverStartedAt = new Date().toISOString();
 
 // ── Config ──────────────────────────────────────────────────
 
@@ -69,6 +70,7 @@ function clearTokens() {
 
 // Load tokens from file on startup
 let tokenStore = loadTokens();
+console.log('[WHOOP] Token load:', tokenStore.accessToken ? 'access token found' : 'no access token', tokenStore.refreshToken ? '+ refresh token' : '(no refresh token)', tokenStore.expiresAt ? `expires ${new Date(tokenStore.expiresAt).toISOString()}` : '');
 
 function isWhoopConfigured() {
   return WHOOP_CLIENT_ID && WHOOP_CLIENT_ID !== 'your_client_id_here' &&
@@ -131,7 +133,8 @@ async function exchangeCodeForToken(code) {
 }
 
 async function refreshAccessToken() {
-  if (!tokenStore.refreshToken) return false;
+  console.log('[WHOOP] Attempting token refresh...');
+  if (!tokenStore.refreshToken) { console.log('[WHOOP] No refresh token available'); return false; }
 
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
@@ -153,9 +156,10 @@ async function refreshAccessToken() {
       expiresAt: Date.now() + (result.body.expires_in || 3600) * 1000
     };
     saveTokens(tokenStore);
+    console.log('[WHOOP] Token refresh successful, expires', new Date(tokenStore.expiresAt).toISOString());
     return true;
   }
-  console.error('Token refresh failed:', result.status, result.body);
+  console.error('[WHOOP] Token refresh failed:', result.status, result.body);
   tokenStore = { accessToken: null, refreshToken: null, expiresAt: null };
   saveTokens(tokenStore);
   return false;
@@ -240,14 +244,47 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // ── Status Endpoint ─────────────────────────────────────────
 
+function getWhoopStatus() {
+  const configured = isWhoopConfigured();
+  const tokenValid = isTokenValid();
+  const hasRefreshToken = !!tokenStore.refreshToken;
+  const hasAccessToken = !!tokenStore.accessToken;
+  const expiresAt = tokenStore.expiresAt ? new Date(tokenStore.expiresAt).toISOString() : null;
+  const tokenExpired = hasAccessToken && tokenStore.expiresAt && Date.now() >= tokenStore.expiresAt;
+
+  let status;
+  if (!configured) status = 'not_configured';
+  else if (tokenValid) status = 'connected';
+  else if (hasRefreshToken) status = 'token_expired';       // can auto-refresh
+  else if (hasAccessToken && tokenExpired) status = 'reconnect_required';
+  else status = 'not_connected';
+
+  return { status, configured, connected: tokenValid || hasRefreshToken, tokenValid, hasRefreshToken, expiresAt, tokenExpired: !!tokenExpired };
+}
+
 app.get('/api/whoop/status', (req, res) => {
-  res.json({
-    configured: isWhoopConfigured(),
-    connected: isTokenValid() || !!tokenStore.refreshToken,
-    tokenValid: isTokenValid(),
-    hasRefreshToken: !!tokenStore.refreshToken,
-    expiresAt: tokenStore.expiresAt ? new Date(tokenStore.expiresAt).toISOString() : null
-  });
+  res.json(getWhoopStatus());
+});
+
+// ── Combined Status Endpoint ────────────────────────────────
+
+app.get('/api/status', async (req, res) => {
+  const result = {
+    whoop: getWhoopStatus(),
+    clickup: getClickUpStatus(),
+    calendar: getCalendarStatus(),
+    serverStartedAt: serverStartedAt
+  };
+  // Optional: verify ClickUp token on first load
+  if (req.query.verify === 'true' && result.clickup.configured) {
+    try {
+      const probe = await clickUpGet('/team');
+      if (probe.status === 200) result.clickup.status = 'connected';
+      else if (probe.status === 401) { result.clickup.status = 'reconnect_required'; result.clickup.error = 'API token invalid'; }
+      else { result.clickup.status = 'api_error'; result.clickup.error = `HTTP ${probe.status}`; }
+    } catch (err) { result.clickup.status = 'api_error'; result.clickup.error = err.message; }
+  }
+  res.json(result);
 });
 
 // ── OAuth Flow ──────────────────────────────────────────────
@@ -326,7 +363,8 @@ app.get('/api/whoop/recovery', requireWhoop, async (req, res) => {
       } : null
     });
   } catch (err) {
-    res.status(err.message.includes('reconnect') ? 401 : 500).json({ error: err.message });
+    const isAuth = err.message.includes('reconnect') || err.message.includes('Unauthorized') || err.message.includes('expired');
+    res.status(isAuth ? 401 : 500).json({ error: err.message, errorCode: isAuth ? 'token_expired' : 'api_error', recoverable: isAuth, action: isAuth ? 'reconnect' : 'retry' });
   }
 });
 
@@ -357,7 +395,8 @@ app.get('/api/whoop/sleep', requireWhoop, async (req, res) => {
       } : null
     });
   } catch (err) {
-    res.status(err.message.includes('reconnect') ? 401 : 500).json({ error: err.message });
+    const isAuth = err.message.includes('reconnect') || err.message.includes('Unauthorized') || err.message.includes('expired');
+    res.status(isAuth ? 401 : 500).json({ error: err.message, errorCode: isAuth ? 'token_expired' : 'api_error', recoverable: isAuth, action: isAuth ? 'reconnect' : 'retry' });
   }
 });
 
@@ -387,7 +426,8 @@ app.get('/api/whoop/workout', requireWhoop, async (req, res) => {
       }))
     });
   } catch (err) {
-    res.status(err.message.includes('reconnect') ? 401 : 500).json({ error: err.message });
+    const isAuth = err.message.includes('reconnect') || err.message.includes('Unauthorized') || err.message.includes('expired');
+    res.status(isAuth ? 401 : 500).json({ error: err.message, errorCode: isAuth ? 'token_expired' : 'api_error', recoverable: isAuth, action: isAuth ? 'reconnect' : 'retry' });
   }
 });
 
@@ -412,7 +452,8 @@ app.get('/api/whoop/cycle', requireWhoop, async (req, res) => {
       } : null
     });
   } catch (err) {
-    res.status(err.message.includes('reconnect') ? 401 : 500).json({ error: err.message });
+    const isAuth = err.message.includes('reconnect') || err.message.includes('Unauthorized') || err.message.includes('expired');
+    res.status(isAuth ? 401 : 500).json({ error: err.message, errorCode: isAuth ? 'token_expired' : 'api_error', recoverable: isAuth, action: isAuth ? 'reconnect' : 'retry' });
   }
 });
 
@@ -453,7 +494,8 @@ app.get('/api/whoop/all', requireWhoop, async (req, res) => {
       ].filter(Boolean)
     });
   } catch (err) {
-    res.status(err.message.includes('reconnect') ? 401 : 500).json({ error: err.message });
+    const isAuth = err.message.includes('reconnect') || err.message.includes('Unauthorized') || err.message.includes('expired');
+    res.status(isAuth ? 401 : 500).json({ error: err.message, errorCode: isAuth ? 'token_expired' : 'api_error', recoverable: isAuth, action: isAuth ? 'reconnect' : 'retry' });
   }
 });
 
@@ -619,12 +661,33 @@ function normalizeTask(raw, listCategory) {
 
 // ── Routes ──────────────────────────────────────────────────
 
-app.get('/api/clickup/status', (req, res) => {
-  res.json({
-    configured: isClickUpConfigured(),
-    spaceId: CLICKUP_SPACE_ID,
-    userId: CLICKUP_MICHAEL_USER_ID
-  });
+function getClickUpStatus() {
+  const configured = isClickUpConfigured();
+  let status = configured ? 'connected' : 'not_configured';
+  return { status, configured, spaceId: CLICKUP_SPACE_ID, userId: CLICKUP_MICHAEL_USER_ID };
+}
+
+app.get('/api/clickup/status', async (req, res) => {
+  const base = getClickUpStatus();
+  // Optional deep verification
+  if (req.query.verify === 'true' && base.configured) {
+    try {
+      const probe = await clickUpGet('/team');
+      if (probe.status === 200) {
+        base.status = 'connected';
+      } else if (probe.status === 401) {
+        base.status = 'reconnect_required';
+        base.error = 'API token is invalid or expired';
+      } else {
+        base.status = 'api_error';
+        base.error = `ClickUp API returned HTTP ${probe.status}`;
+      }
+    } catch (err) {
+      base.status = 'api_error';
+      base.error = err.message;
+    }
+  }
+  res.json(base);
 });
 
 // Debug: explore FULL workspace — all teams, spaces, folders, lists
@@ -674,7 +737,7 @@ app.get('/api/clickup/explore', async (req, res) => {
 // Main task fetch: list-by-list from the space
 app.get('/api/clickup/tasks', async (req, res) => {
   if (!isClickUpConfigured()) {
-    return res.status(400).json({ error: 'ClickUp not configured', help: 'Add CLICKUP_API_TOKEN to .env' });
+    return res.status(400).json({ error: 'ClickUp not configured', errorCode: 'not_configured', recoverable: false, action: 'configure', help: 'Add CLICKUP_API_TOKEN to .env' });
   }
 
   const stats = {
@@ -744,7 +807,7 @@ app.get('/api/clickup/tasks', async (req, res) => {
     });
   } catch (err) {
     console.error('ClickUp fetch error:', err.message);
-    res.status(500).json({ error: 'Failed to fetch ClickUp tasks', detail: err.message });
+    res.status(500).json({ error: 'Failed to fetch ClickUp tasks', detail: err.message, errorCode: 'api_error', recoverable: true, action: 'retry' });
   }
 });
 
@@ -809,6 +872,7 @@ function clearGoogleTokens() {
 }
 
 googleTokens = loadGoogleTokens();
+console.log('[Calendar] Token load:', googleTokens.accessToken ? 'access token found' : 'no access token', googleTokens.refreshToken ? '+ refresh token' : '(no refresh token)', googleTokens.expiresAt ? `expires ${new Date(googleTokens.expiresAt).toISOString()}` : '');
 
 function isGoogleConfigured() {
   return GOOGLE_CLIENT_ID && GOOGLE_CLIENT_ID !== 'your_google_client_id' &&
@@ -840,7 +904,8 @@ async function exchangeGoogleCode(code) {
 }
 
 async function refreshGoogleToken() {
-  if (!googleTokens.refreshToken) return false;
+  console.log('[Calendar] Attempting token refresh...');
+  if (!googleTokens.refreshToken) { console.log('[Calendar] No refresh token available'); return false; }
   const body = new URLSearchParams({
     client_id: GOOGLE_CLIENT_ID, client_secret: GOOGLE_CLIENT_SECRET,
     refresh_token: googleTokens.refreshToken, grant_type: 'refresh_token'
@@ -852,9 +917,10 @@ async function refreshGoogleToken() {
     googleTokens.accessToken = res.body.access_token;
     googleTokens.expiresAt = Date.now() + (res.body.expires_in || 3600) * 1000;
     saveGoogleTokens(googleTokens);
+    console.log('[Calendar] Token refresh successful, expires', new Date(googleTokens.expiresAt).toISOString());
     return true;
   }
-  console.error('Google token refresh failed:', res.status);
+  console.error('[Calendar] Token refresh failed:', res.status);
   return false;
 }
 
@@ -879,12 +945,27 @@ async function googleGet(endpoint) {
 
 // ── Google Calendar Routes ──────────────────────────────────
 
+function getCalendarStatus() {
+  const configured = isGoogleConfigured();
+  const tokenValid = isGoogleTokenValid();
+  const hasRefreshToken = !!googleTokens.refreshToken;
+  const hasAccessToken = !!googleTokens.accessToken;
+  const expiresAt = googleTokens.expiresAt ? new Date(googleTokens.expiresAt).toISOString() : null;
+  const tokenExpired = hasAccessToken && googleTokens.expiresAt && Date.now() >= googleTokens.expiresAt;
+
+  let status;
+  if (!configured) status = 'not_configured';
+  else if (tokenValid) status = 'connected';
+  else if (hasRefreshToken) status = 'token_expired';       // can auto-refresh
+  else if (hasAccessToken && tokenExpired) status = 'reconnect_required';
+  else if (configured && !hasAccessToken && !hasRefreshToken) status = 'not_connected';
+  else status = 'not_connected';
+
+  return { status, configured, connected: tokenValid || hasRefreshToken, tokenValid, hasRefreshToken, expiresAt, tokenExpired: !!tokenExpired };
+}
+
 app.get('/api/calendar/status', (req, res) => {
-  res.json({
-    configured: isGoogleConfigured(),
-    connected: isGoogleTokenValid() || !!googleTokens.refreshToken,
-    tokenValid: isGoogleTokenValid()
-  });
+  res.json(getCalendarStatus());
 });
 
 app.get('/auth/google', (req, res) => {
@@ -917,7 +998,7 @@ app.post('/api/calendar/disconnect', (req, res) => {
 // Fetch today's events
 app.get('/api/calendar/today', async (req, res) => {
   if (!isGoogleTokenValid() && !googleTokens.refreshToken) {
-    return res.status(401).json({ error: 'Not connected to Google Calendar' });
+    return res.status(401).json({ error: 'Not connected to Google Calendar', errorCode: 'not_connected', recoverable: true, action: 'reconnect' });
   }
   try {
     // Use local date from query or default to today
@@ -965,9 +1046,9 @@ app.get('/api/calendar/today', async (req, res) => {
   } catch (err) {
     console.error('Google Calendar fetch error:', err.message);
     if (err.message.includes('expired') || err.message.includes('Unauthorized')) {
-      return res.status(401).json({ error: 'Token expired. Please reconnect.' });
+      return res.status(401).json({ error: 'Token expired. Please reconnect.', errorCode: 'token_expired', recoverable: true, action: 'reconnect' });
     }
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message, errorCode: 'api_error', recoverable: true, action: 'retry' });
   }
 });
 
