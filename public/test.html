@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Time Allocation OS — WHOOP Integration</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --surface: #fff; --border: #e2e4e9; --text: #1a1d23;
+    --text-secondary: #5f6368; --text-muted: #9aa0a6;
+    --accent: #4f46e5; --green: #16a34a; --green-light: #dcfce7;
+    --amber: #d97706; --amber-light: #fef3c7;
+    --red: #dc2626; --red-light: #fee2e2;
+    --radius: 12px; --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.5; padding: 0 0 60px;
+  }
+  header {
+    background: linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #4338ca 100%);
+    color: #fff; padding: 28px 32px 24px;
+  }
+  header h1 { font-size: 22px; font-weight: 700; }
+  header p { font-size: 13px; opacity: 0.7; margin-top: 4px; }
+  .container { max-width: 900px; margin: 0 auto; padding: 0 20px; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); box-shadow: var(--shadow);
+    padding: 24px; margin-top: 20px;
+  }
+  .card h2 {
+    font-size: 14px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.5px; color: var(--text-secondary); margin-bottom: 16px;
+  }
+
+  /* Status */
+  .status-row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .status-dot.green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .status-dot.amber { background: var(--amber); }
+  .status-dot.red { background: var(--red); }
+  .status-dot.gray { background: #9ca3af; }
+  .status-text { font-size: 15px; font-weight: 600; }
+  .status-detail { font-size: 12px; color: var(--text-muted); }
+
+  /* Buttons */
+  .btn {
+    display: inline-block; border: none; border-radius: 8px; padding: 10px 24px;
+    font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.15s;
+    text-decoration: none;
+  }
+  .btn:active { transform: scale(0.98); }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: #4338ca; }
+  .btn-whoop { background: #1a1a2e; color: #fff; }
+  .btn-whoop:hover { background: #0f0f1e; }
+  .btn-outline {
+    background: transparent; color: var(--text-secondary);
+    border: 1px solid var(--border); padding: 9px 18px;
+  }
+  .btn-outline:hover { background: #f9fafb; }
+  .btn-danger { background: var(--red-light); color: var(--red); }
+  .btn-danger:hover { background: #fecaca; }
+  .btn-sm { padding: 7px 16px; font-size: 13px; }
+  .btn-row { display: flex; gap: 10px; flex-wrap: wrap; }
+
+  /* API test */
+  .endpoint-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+  .endpoint-card {
+    background: #fafbfc; border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px; cursor: pointer; transition: all 0.15s;
+  }
+  .endpoint-card:hover { background: #f0f1f3; border-color: var(--accent); }
+  .endpoint-card .ep-method { font-size: 11px; font-weight: 700; color: var(--green); }
+  .endpoint-card .ep-path { font-size: 14px; font-weight: 600; margin-top: 2px; }
+  .endpoint-card .ep-desc { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+  /* Response viewer */
+  .response-viewer {
+    background: #1e1e2e; color: #cdd6f4; border-radius: 8px;
+    padding: 16px; margin-top: 16px; font-family: 'SF Mono', Monaco, Consolas, monospace;
+    font-size: 13px; line-height: 1.5; max-height: 500px; overflow: auto;
+    white-space: pre-wrap; word-break: break-word; display: none;
+  }
+  .response-viewer.visible { display: block; }
+  .response-header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-top: 16px; display: none;
+  }
+  .response-header.visible { display: flex; }
+  .response-header .rh-label { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+  .response-header .rh-status { font-size: 12px; font-weight: 600; }
+  .rh-ok { color: var(--green); }
+  .rh-err { color: var(--red); }
+
+  /* Config help */
+  .config-box {
+    background: var(--amber-light); border: 1px solid #fde68a; border-radius: 8px;
+    padding: 14px 18px; font-size: 13px; color: #92400e; margin-top: 12px;
+  }
+  .config-box code { background: rgba(0,0,0,0.06); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+
+  .loading { opacity: 0.5; pointer-events: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <h1>Time Allocation OS</h1>
+    <p>WHOOP Integration — Local Dev</p>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- Connection Status -->
+  <div class="card" id="statusCard">
+    <h2>WHOOP Connection</h2>
+    <div class="status-row">
+      <span class="status-dot gray" id="statusDot"></span>
+      <span class="status-text" id="statusText">Checking...</span>
+    </div>
+    <div class="status-detail" id="statusDetail"></div>
+    <div class="btn-row" style="margin-top: 16px;">
+      <a href="/auth/whoop" class="btn btn-whoop" id="btnConnect" style="display:none">Connect WHOOP</a>
+      <button class="btn btn-danger btn-sm" id="btnDisconnect" style="display:none" onclick="disconnect()">Disconnect</button>
+      <button class="btn btn-outline btn-sm" onclick="checkStatus()">Refresh Status</button>
+    </div>
+    <div id="configHelp"></div>
+  </div>
+
+  <!-- API Endpoints -->
+  <div class="card">
+    <h2>Test API Endpoints</h2>
+    <p style="font-size:13px; color:var(--text-secondary); margin-bottom: 14px;">
+      Click an endpoint to call it and see the response. Requires an active WHOOP connection.
+    </p>
+    <div class="endpoint-grid">
+      <div class="endpoint-card" onclick="callEndpoint('/api/whoop/recovery')">
+        <div class="ep-method">GET</div>
+        <div class="ep-path">/api/whoop/recovery</div>
+        <div class="ep-desc">Recovery score, HRV, resting HR</div>
+      </div>
+      <div class="endpoint-card" onclick="callEndpoint('/api/whoop/sleep')">
+        <div class="ep-method">GET</div>
+        <div class="ep-path">/api/whoop/sleep</div>
+        <div class="ep-desc">Sleep performance, hours, efficiency</div>
+      </div>
+      <div class="endpoint-card" onclick="callEndpoint('/api/whoop/workout')">
+        <div class="ep-method">GET</div>
+        <div class="ep-path">/api/whoop/workout</div>
+        <div class="ep-desc">Recent workouts, strain, HR</div>
+      </div>
+      <div class="endpoint-card" onclick="callEndpoint('/api/whoop/cycle')">
+        <div class="ep-method">GET</div>
+        <div class="ep-path">/api/whoop/cycle</div>
+        <div class="ep-desc">Current cycle strain data</div>
+      </div>
+      <div class="endpoint-card" onclick="callEndpoint('/api/whoop/all')" style="grid-column: 1 / -1;">
+        <div class="ep-method">GET</div>
+        <div class="ep-path">/api/whoop/all</div>
+        <div class="ep-desc">Combined: recovery + sleep + cycle in one call (used by dashboard)</div>
+      </div>
+    </div>
+
+    <div class="response-header" id="responseHeader">
+      <span class="rh-label" id="responseLabel"></span>
+      <span class="rh-status" id="responseStatus"></span>
+    </div>
+    <pre class="response-viewer" id="responseViewer"></pre>
+  </div>
+
+</div>
+
+<script>
+async function checkStatus() {
+  try {
+    const res = await fetch('/api/whoop/status');
+    const data = await res.json();
+    const dot = document.getElementById('statusDot');
+    const text = document.getElementById('statusText');
+    const detail = document.getElementById('statusDetail');
+    const btnConnect = document.getElementById('btnConnect');
+    const btnDisconnect = document.getElementById('btnDisconnect');
+    const configHelp = document.getElementById('configHelp');
+
+    if (data.connected && data.tokenValid) {
+      dot.className = 'status-dot green';
+      text.textContent = 'Connected';
+      detail.textContent = 'Token valid. Expires: ' + new Date(data.expiresAt).toLocaleString();
+      btnConnect.style.display = 'none';
+      btnDisconnect.style.display = '';
+      configHelp.innerHTML = '';
+    } else if (data.connected && data.hasRefreshToken) {
+      dot.className = 'status-dot amber';
+      text.textContent = 'Connected (token expired — will auto-refresh)';
+      detail.textContent = 'Refresh token available. Next API call will refresh automatically.';
+      btnConnect.style.display = 'none';
+      btnDisconnect.style.display = '';
+      configHelp.innerHTML = '';
+    } else if (data.configured) {
+      dot.className = 'status-dot red';
+      text.textContent = 'Not Connected';
+      detail.textContent = 'Credentials configured. Click "Connect WHOOP" to authorize.';
+      btnConnect.style.display = '';
+      btnDisconnect.style.display = 'none';
+      configHelp.innerHTML = '';
+    } else {
+      dot.className = 'status-dot gray';
+      text.textContent = 'Not Configured';
+      detail.textContent = 'WHOOP credentials are missing.';
+      btnConnect.style.display = 'none';
+      btnDisconnect.style.display = 'none';
+      configHelp.innerHTML = `
+        <div class="config-box">
+          <strong>Setup required:</strong><br>
+          1. Go to <a href="https://developer-dashboard.whoop.com" target="_blank">developer-dashboard.whoop.com</a> and create an app<br>
+          2. Set redirect URI to <code>http://localhost:3000/callback</code><br>
+          3. Copy <code>.env.example</code> to <code>.env</code><br>
+          4. Paste your Client ID and Client Secret into <code>.env</code><br>
+          5. Restart the server: <code>npm start</code>
+        </div>`;
+    }
+  } catch (err) {
+    document.getElementById('statusText').textContent = 'Error checking status';
+    document.getElementById('statusDetail').textContent = err.message;
+  }
+}
+
+async function disconnect() {
+  await fetch('/api/whoop/disconnect', { method: 'POST' });
+  checkStatus();
+  document.getElementById('responseViewer').className = 'response-viewer';
+  document.getElementById('responseHeader').className = 'response-header';
+}
+
+async function callEndpoint(path) {
+  const viewer = document.getElementById('responseViewer');
+  const header = document.getElementById('responseHeader');
+  const label = document.getElementById('responseLabel');
+  const status = document.getElementById('responseStatus');
+
+  viewer.className = 'response-viewer visible';
+  header.className = 'response-header visible';
+  label.textContent = 'GET ' + path;
+  status.textContent = 'Loading...';
+  status.className = 'rh-status';
+  viewer.textContent = 'Fetching...';
+
+  try {
+    const res = await fetch(path);
+    const data = await res.json();
+    status.textContent = res.status + ' ' + res.statusText;
+    status.className = 'rh-status ' + (res.ok ? 'rh-ok' : 'rh-err');
+    viewer.textContent = JSON.stringify(data, null, 2);
+  } catch (err) {
+    status.textContent = 'Network Error';
+    status.className = 'rh-status rh-err';
+    viewer.textContent = err.message;
+  }
+}
+
+// Check on load + handle OAuth redirect
+const params = new URLSearchParams(window.location.search);
+if (params.get('connected')) {
+  history.replaceState({}, '', '/');
+}
+checkStatus();
+</script>
+</body>
+</html>
