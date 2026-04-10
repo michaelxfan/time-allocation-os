@@ -650,6 +650,7 @@ function normalizeTask(raw, listCategory) {
     steps,
     assignee: (raw.assignees || [])[0]?.username || null,
     status: raw.status?.status || null,
+    url: raw.url || null,
     source: 'clickup',
     aeSource: 'inferred',
     impact,

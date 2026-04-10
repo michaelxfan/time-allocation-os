@@ -94,6 +94,10 @@
   /* Sections */
   .section { margin-top:24px; }
   .section-title { font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-secondary); margin-bottom:12px; }
+  .clickup-ext-link { display:block; font-size:12px; color:var(--text-muted); text-decoration:none; margin:-6px 0 14px; transition:color 0.15s; }
+  .clickup-ext-link:hover { color:var(--accent); }
+  .task-clickup-link { font-size:11px; color:var(--text-muted); text-decoration:none; transition:color 0.15s; white-space:nowrap; }
+  .task-clickup-link:hover { color:var(--accent); }
 
   /* Summary — directive cards */
   .summary-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; }
@@ -521,6 +525,7 @@ let whoopState = null;
 let whoopLastSyncAt = null;
 let whoopStatus = { configured:false, connected:false, status:'unknown' };
 const API_BASE = '';
+const CLICKUP_TOP_PRIORITIES_URL = 'https://app.clickup.com/90144756697';
 let backendReachable = null; // null=unknown, true/false
 
 async function getWhoopConnectionStatus() {
@@ -1284,10 +1289,12 @@ function renderTasks(ranked,ctx){
     const stepsHtml=t.steps&&t.steps.length?`<button class="btn-toggle-steps" onclick="toggleSteps('${sid}',this)">Show steps</button><div id="${sid}" class="task-steps hidden"><ol>${t.steps.map(s=>`<li>${s}</li>`).join('')}</ol></div>`:'';
     const ctxLabel=t.context?`<span style="color:var(--text-muted)">${t.context}</span>`:'';
     const topCls=isTop?' task-top':'';
-    return`<div class="task-card${topCls}"><div class="task-header"><span class="task-title">${i+1}. ${t.title}</span><div class="task-meta"><span class="badge ${listBadge(t.list)}">${t.list}</span><span class="badge ${aeCls}">${aeLabel}</span><span class="badge" style="background:#f3f4f6;color:#374151">${t.priority||'—'}</span></div></div><div class="task-info"><span>${tb} min</span>${due?`<span>${due}</span>`:''}${t.recurring?'<span>Recurring</span>':''}${ctxLabel}</div><div class="task-reason">${item.reason}</div>${stepsHtml}</div>`;
+    const taskLink=t.url?`<a class="task-clickup-link" href="${t.url}" target="_blank" rel="noopener noreferrer">Open in ClickUp →</a>`:'';
+    return`<div class="task-card${topCls}"><div class="task-header"><span class="task-title">${i+1}. ${t.title}</span><div class="task-meta">${taskLink}<span class="badge ${listBadge(t.list)}">${t.list}</span><span class="badge ${aeCls}">${aeLabel}</span><span class="badge" style="background:#f3f4f6;color:#374151">${t.priority||'—'}</span></div></div><div class="task-info"><span>${tb} min</span>${due?`<span>${due}</span>`:''}${t.recurring?'<span>Recurring</span>':''}${ctxLabel}</div><div class="task-reason">${item.reason}</div>${stepsHtml}</div>`;
   }
 
-  let html = `<div class="section-title">Top Priorities ${srcBadge}</div>${suppNote}<div class="tasks-list">`;
+  const clickupLink = (ctx.taskSource==='clickup'||ctx.taskSource==='live'||ctx.taskSource==='stale') ? `<a class="clickup-ext-link" href="${CLICKUP_TOP_PRIORITIES_URL}" target="_blank" rel="noopener noreferrer">Open in ClickUp →</a>` : '';
+  let html = `<div class="section-title">Top Priorities ${srcBadge}</div>${clickupLink}${suppNote}<div class="tasks-list">`;
   html += top3.map((item,i) => renderCard(item,i,true)).join('');
   html += `</div>`;
 
