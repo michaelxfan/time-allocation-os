@@ -305,6 +305,24 @@
   /* Soft commitment in timeline */
   .tl-block.tl-commitment-soft { border-left:2px dashed #d1d5db; opacity:0.55; }
   .tl-type.type-commitment-soft { color:#b0b5bd; }
+
+  /* Quick Decision Mode */
+  .qdm-panel { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:16px 24px 18px; margin-top:16px; }
+  .qdm-title { font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-secondary); margin-bottom:14px; }
+  .qdm-inputs { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px 16px; }
+  .qdm-inputs .input-group select { padding:7px 10px; font-size:13px; }
+  .qdm-inputs .input-group label { font-size:11px; }
+  .qdm-cta { margin-top:14px; }
+  .qdm-result { margin-top:16px; padding:16px 20px; background:linear-gradient(135deg,#eef2ff,#e0e7ff); border:2px solid var(--accent); border-radius:var(--radius); }
+  .qdm-pick-label { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.8px; color:var(--accent); margin-bottom:6px; }
+  .qdm-pick-title { font-size:18px; font-weight:700; color:var(--text); }
+  .qdm-pick-meta { display:flex; gap:14px; align-items:center; flex-wrap:wrap; margin-top:6px; font-size:12px; }
+  .qdm-pick-reason { color:var(--accent); font-style:italic; }
+  .qdm-pick-timebox { font-weight:600; color:var(--text-secondary); }
+  .qdm-pick-link { font-size:11px; color:var(--text-muted); text-decoration:none; transition:color 0.15s; }
+  .qdm-pick-link:hover { color:var(--accent); }
+  .qdm-backup { margin-top:10px; padding-top:10px; border-top:1px solid rgba(79,70,229,0.15); font-size:12px; color:var(--text-secondary); }
+  .qdm-backup strong { color:var(--text); font-weight:600; }
 </style>
 </head>
 <body>
@@ -333,6 +351,33 @@
 
 <div class="container">
   <div id="systemBanner" class="system-banner" style="display:none"></div>
+
+  <div class="qdm-panel" id="qdmPanel">
+    <div class="qdm-title">Quick Decision — What should I do right now?</div>
+    <div class="qdm-inputs">
+      <div class="input-group">
+        <label for="qdmTime">Time Available</label>
+        <select id="qdmTime"><option value="15">15 min</option><option value="30" selected>30 min</option><option value="45">45 min</option><option value="60">60 min</option><option value="90">90 min</option></select>
+      </div>
+      <div class="input-group">
+        <label for="qdmEnergy">Current Energy</label>
+        <select id="qdmEnergy"><option value="auto" selected>Auto (use daily AE)</option><option value="1">AE 1 — Low</option><option value="2">AE 2 — Medium</option><option value="3">AE 3 — High</option></select>
+      </div>
+      <div class="input-group">
+        <label for="qdmContext">Context</label>
+        <select id="qdmContext"><option value="any" selected>Any</option><option value="laptop">Laptop</option><option value="phone">Phone</option><option value="walking">Outside / Walking</option><option value="errands">Errands</option><option value="social">Social / In-between</option></select>
+      </div>
+      <div class="input-group">
+        <label for="qdmFocus">Focus Area</label>
+        <select id="qdmFocus"><option value="any" selected>Any</option><option value="GH">GH</option><option value="Personal">Personal</option><option value="Innovative">Innovative</option></select>
+      </div>
+    </div>
+    <div class="qdm-cta">
+      <button class="btn btn-primary btn-sm" onclick="runQuickDecision()">What should I do right now?</button>
+    </div>
+    <div id="qdmResult"></div>
+  </div>
+
   <div class="top-panels">
     <div class="input-panel">
       <div class="panel-title">Daily Refresh Inputs</div>
@@ -996,6 +1041,116 @@ function rankTasks(tasks,ctx){
 function normalizeTimebox(m){if(m<=10)return 15;if(m<=17)return 15;if(m<=22)return 20;if(m<=35)return 30;if(m<=52)return 45;if(m<=75)return 60;return 90;}
 
 // ============================================================
+// QUICK DECISION MODE
+// ============================================================
+let qdmRankedCache = [];
+let qdmCtxCache = null;
+
+const QDM_CONTEXT_FIT = {
+  laptop:   { GH:1.0, Personal:0.9, Innovative:1.0 },
+  phone:    { GH:0.4, Personal:0.8, Innovative:0.3 },
+  walking:  { GH:0.1, Personal:0.5, Innovative:0.6 },
+  errands:  { GH:0.1, Personal:1.0, Innovative:0.2 },
+  social:   { GH:0.2, Personal:0.7, Innovative:0.3 },
+  any:      { GH:1.0, Personal:1.0, Innovative:1.0 }
+};
+
+const QDM_CONTEXT_FALLBACKS = {
+  laptop:  'Clear your inbox or triage Slack for 15 minutes.',
+  phone:   'Reply to a pending message or review your calendar.',
+  walking: 'Listen to a podcast or brainstorm on a current problem.',
+  errands: 'Knock out a quick personal errand nearby.',
+  social:  'Follow up with someone you\'ve been meaning to reach.',
+  any:     'Take a 5-minute break, then review your top priorities.'
+};
+
+function qdmScoreTask(item, timeAvail, effectiveAE, context, focusArea) {
+  const t = item.task;
+  const est = t.estimatedMinutes || 30;
+  const tb = normalizeTimebox(est);
+
+  // Hard filter: skip tasks that exceed time + 10min grace
+  if (tb > timeAvail + 10) return null;
+
+  // Focus area filter
+  if (focusArea !== 'any' && t.list !== focusArea) return null;
+
+  let score = item.score; // start from daily ranking score
+
+  // Time fit: reward tasks that fill the window well, penalize overruns
+  const timeRatio = tb / timeAvail;
+  if (timeRatio <= 1.0) score *= (0.7 + 0.3 * timeRatio); // closer to window = better
+  else score *= 0.5; // over window but within grace
+
+  // AE fit: penalize tasks above current energy
+  const taskAE = t.ae ?? 2;
+  if (taskAE > effectiveAE) score *= 0.3;
+  else if (taskAE === effectiveAE) score *= 1.0;
+  else score *= 0.85; // slightly below energy is fine
+
+  // Context fit
+  const ctxFit = (QDM_CONTEXT_FIT[context] || QDM_CONTEXT_FIT.any)[t.list] || 0.5;
+  score *= ctxFit;
+
+  return { task: t, score, reason: item.reason, timebox: tb };
+}
+
+function runQuickDecision() {
+  const timeAvail = parseInt(document.getElementById('qdmTime').value);
+  const energySel = document.getElementById('qdmEnergy').value;
+  const context = document.getElementById('qdmContext').value;
+  const focusArea = document.getElementById('qdmFocus').value;
+
+  const dailyAE = qdmCtxCache ? qdmCtxCache.aeCeiling : 2;
+  const effectiveAE = energySel === 'auto' ? dailyAE : Math.min(parseInt(energySel), dailyAE);
+
+  const resultEl = document.getElementById('qdmResult');
+
+  if (!qdmRankedCache.length) {
+    resultEl.innerHTML = `<div class="qdm-result"><div class="qdm-pick-label">No tasks loaded</div><p style="font-size:13px;color:var(--text-secondary);margin-top:4px">Run <strong>Refresh Allocation</strong> first to load your tasks, then try again.</p></div>`;
+    return;
+  }
+
+  // Score all ranked tasks through QDM lens
+  const scored = [];
+  for (const item of qdmRankedCache) {
+    const s = qdmScoreTask(item, timeAvail, effectiveAE, context, focusArea);
+    if (s) scored.push(s);
+  }
+  scored.sort((a, b) => b.score - a.score);
+
+  if (!scored.length) {
+    const fallback = QDM_CONTEXT_FALLBACKS[context] || QDM_CONTEXT_FALLBACKS.any;
+    resultEl.innerHTML = `<div class="qdm-result"><div class="qdm-pick-label">No matching tasks</div><div class="qdm-pick-title">${fallback}</div><div class="qdm-pick-meta"><span class="qdm-pick-reason">No tasks fit your current time, energy, and context.</span><span class="qdm-pick-timebox">${timeAvail} min</span></div></div>`;
+    return;
+  }
+
+  const pick = scored[0];
+  const linkHtml = pick.task.url ? ` <a class="qdm-pick-link" href="${pick.task.url}" target="_blank" rel="noopener noreferrer">Open in ClickUp →</a>` : '';
+  const backup = scored.length > 1 ? scored[1] : null;
+  const backupLinkHtml = backup && backup.task.url ? ` <a class="qdm-pick-link" href="${backup.task.url}" target="_blank" rel="noopener noreferrer">Open →</a>` : '';
+
+  let html = `<div class="qdm-result">`;
+  html += `<div class="qdm-pick-label">Best Next Action</div>`;
+  html += `<div class="qdm-pick-title">${pick.task.title}${linkHtml}</div>`;
+  html += `<div class="qdm-pick-meta">`;
+  html += `<span class="qdm-pick-reason">${pick.reason}</span>`;
+  html += `<span class="qdm-pick-timebox">${pick.timebox} min</span>`;
+  html += `<span class="badge ${pick.task.ae != null ? aeBadge(pick.task.ae) : 'badge-mixed'}">AE ${pick.task.ae ?? '?'}</span>`;
+  html += `<span class="badge ${listBadge(pick.task.list)}">${pick.task.list}</span>`;
+  html += `</div>`;
+
+  if (backup) {
+    html += `<div class="qdm-backup"><strong>Backup:</strong> ${backup.task.title} · ${backup.timebox} min${backupLinkHtml}</div>`;
+  } else {
+    const fallback = QDM_CONTEXT_FALLBACKS[context] || QDM_CONTEXT_FALLBACKS.any;
+    html += `<div class="qdm-backup"><strong>Backup:</strong> ${fallback}</div>`;
+  }
+  html += `</div>`;
+  resultEl.innerHTML = html;
+}
+
+// ============================================================
 // DAY STRUCTURE
 // ============================================================
 function generateDayStructure(ctx,ranked){const{aeCeiling,dayLane}=ctx;const r=ctx.readiness.recoveryScore??50;const s=[];
@@ -1606,6 +1761,8 @@ async function refreshAllocation(){
   if (clickupResult.errorMessage && clickupResult.fetchSource !== 'live') warnings.push(clickupResult.errorMessage);
 
   const ranked = rankTasks(tasks, ctx);
+  qdmRankedCache = ranked;
+  qdmCtxCache = ctx;
   ctx.taskSource = taskSource;
   ctx.taskStats = taskStats;
   ctx.eligibleCount = ranked.length;
